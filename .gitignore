@@ -1,0 +1,10 @@
+node_modules/
+dist/
+config/
+.env
+.env.local
+*.log
+vite-dev.err
+vite-dev.log
+.codex-*.png
+settingschech.png

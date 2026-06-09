@@ -1,0 +1,17 @@
+services:
+  lumio:
+    build: .
+    container_name: lumio
+    environment:
+      LUMIO_PORT: 3000
+      LUMIO_CONFIG_DIR: /app/config
+      LUMIO_STATIC_DIR: /app/dist
+      JELLYFIN_SERVER_URL: ${JELLYFIN_SERVER_URL:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - lumio_config:/app/config
+    restart: unless-stopped
+
+volumes:
+  lumio_config:

@@ -1,0 +1,9 @@
+node_modules
+dist
+config
+.env
+*.log
+vite-dev.err
+vite-dev.log
+.git
+.DS_Store
