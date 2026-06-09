@@ -734,6 +734,15 @@ function getLibraryTitle(id, library) {
   return getLibraryItems(library).find((item) => item.id === id) || getTitle(id);
 }
 
+function sortSearchResults(items) {
+  const priority = { Movie: 0, Series: 0, Episode: 1 };
+  return [...items].sort((a, b) => {
+    const typeScore = (priority[a.type] ?? 2) - (priority[b.type] ?? 2);
+    if (typeScore !== 0) return typeScore;
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+}
+
 function MediaImage({ src, alt = "", className, imageClassName, loading = "lazy" }) {
   const [loaded, setLoaded] = useState(false);
 
@@ -752,7 +761,8 @@ function MediaImage({ src, alt = "", className, imageClassName, loading = "lazy"
 }
 
 function HeroCarousel({ items = media, savedIds, toggleSaved }) {
-  const heroItems = (items.length ? items : media).slice(0, 5);
+  const eligibleItems = (items.length ? items : media).filter((item) => item.type === "Movie" || item.type === "Series");
+  const heroItems = (eligibleItems.length ? eligibleItems : media).slice(0, 5);
   const [activeIndex, setActiveIndex] = useState(0);
   const active = heroItems[activeIndex] || media[0];
 
@@ -832,19 +842,20 @@ function HeroCarousel({ items = media, savedIds, toggleSaved }) {
 
 function GenrePills({ genresData = genres }) {
   return (
-    <ScrollArea className="mt-4 w-full max-w-full whitespace-nowrap sm:mt-5">
-      <div className="flex gap-2 pb-3">
-        <Button asChild variant="secondary" className="rounded-full">
-          <Link to="/browse">All Genres</Link>
-        </Button>
-        {genresData.map((genre) => (
-          <Button key={genre} asChild variant="outline" className="rounded-full">
-            <Link to={`/browse?genre=${encodeURIComponent(genre)}`}>{genre}</Link>
+    <section className="mt-4 min-w-0 overflow-hidden sm:mt-5">
+      <HorizontalScroller>
+        <div className="flex gap-2 pb-3">
+          <Button asChild variant="secondary" className="rounded-full">
+            <Link to="/browse">All Genres</Link>
           </Button>
-        ))}
-      </div>
-      <ScrollBar orientation="horizontal" />
-    </ScrollArea>
+          {genresData.map((genre) => (
+            <Button key={genre} asChild variant="outline" className="rounded-full">
+              <Link to={`/browse?genre=${encodeURIComponent(genre)}`}>{genre}</Link>
+            </Button>
+          ))}
+        </div>
+      </HorizontalScroller>
+    </section>
   );
 }
 
@@ -993,10 +1004,12 @@ function HorizontalScroller({ children, header, action }) {
 }
 
 function MediaCard({ item, saved, onToggleSaved, className, delay = 0 }) {
+  const primaryHref = item.type === "Episode" ? `/watch/${item.id}` : `/title/${item.id}`;
+
   return (
     <article className={cn("group min-w-0 animate-reveal-up", className)} style={{ animationDelay: `${delay}ms` }}>
       <div className="relative">
-        <Link to={`/title/${item.id}`} className="block">
+        <Link to={primaryHref} className="block">
           <MediaImage
             className="aspect-[2/3] rounded-md"
             imageClassName="transition-transform duration-300 group-hover:scale-105"
@@ -1020,7 +1033,7 @@ function MediaCard({ item, saved, onToggleSaved, className, delay = 0 }) {
         </Button>
       </div>
 
-      <Link to={`/title/${item.id}`} className="mt-2 block min-w-0">
+      <Link to={primaryHref} className="mt-2 block min-w-0">
         <h3 className="animate-text-load line-clamp-2 text-sm font-bold leading-5" style={{ animationDelay: `${delay + 80}ms` }}>
           {item.title}
         </h3>
@@ -1162,7 +1175,7 @@ function SearchPage({ savedIds, toggleSaved, library, session }) {
     const haystack = [item.title, item.type, ...(item.genres || []), ...(item.cast || [])].join(" ").toLowerCase();
     return haystack.includes(lowerQuery);
   });
-  const results = remoteState.items.length > 0 ? remoteState.items : localResults;
+  const results = sortSearchResults(remoteState.items.length > 0 ? remoteState.items : localResults);
 
   useEffect(() => {
     let active = true;

@@ -187,7 +187,7 @@ async function handleApi(request, response, requestUrl) {
       Limit: "60",
     }), { headers: jellyfinHeaders(token) });
 
-    sendJson(response, 200, { items: getItemsArray(data).map((item) => mapJellyfinItem(item, token)) });
+    sendJson(response, 200, { items: sortSearchItems(getItemsArray(data).map((item) => mapJellyfinItem(item, token))) });
     return;
   }
 
@@ -590,6 +590,20 @@ function mergeItems(items) {
     seen.set(item.id, item);
   }
   return [...seen.values()];
+}
+
+function sortSearchItems(items) {
+  const priority = {
+    Movie: 0,
+    Series: 0,
+    Episode: 1,
+  };
+
+  return [...items].sort((a, b) => {
+    const typeScore = (priority[a.type] ?? 2) - (priority[b.type] ?? 2);
+    if (typeScore !== 0) return typeScore;
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
 }
 
 function mapJellyfinItem(item = {}, token = "", episodes = [], index = 0) {
