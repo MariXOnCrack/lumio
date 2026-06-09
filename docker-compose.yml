@@ -8,7 +8,7 @@ services:
       LUMIO_STATIC_DIR: /app/dist
       JELLYFIN_SERVER_URL: ${JELLYFIN_SERVER_URL:-}
     ports:
-      - "3000:3000"
+      - "${LUMIO_HOST_PORT:-37891}:3000"
     volumes:
       - lumio_config:/app/config
     restart: unless-stopped

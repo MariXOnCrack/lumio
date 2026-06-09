@@ -29,8 +29,10 @@ Lumio is a React streaming-service frontend with a small Node server for Docker 
 4. Open Lumio:
 
    ```text
-   http://localhost:3000
+   http://localhost:37891
    ```
+
+   The host port can be changed with `LUMIO_HOST_PORT` in `.env`.
 
 ## Jellyfin Admin Settings
 
