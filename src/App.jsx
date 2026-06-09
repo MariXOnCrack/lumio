@@ -12,6 +12,7 @@ import {
   Home,
   Info,
   KeyRound,
+  Library as LibraryIcon,
   Loader2,
   LogOut,
   Maximize2,
@@ -63,6 +64,7 @@ import lumioIcon from "../lumio_icon_transparent.png";
 
 const navItems = [
   { label: "Home", path: "/", icon: Home },
+  { label: "Library", path: "/library", icon: LibraryIcon },
   { label: "Discover", path: "/discover", icon: Sparkles },
   { label: "Browse", path: "/browse", icon: Compass },
   { label: "Series", path: "/browse?type=Series", icon: Tv },
@@ -242,6 +244,7 @@ function App() {
     <Routes>
       <Route element={<Shell config={config} session={session} onLogout={handleLogout} />}>
         <Route index element={<HomePage {...appState} />} />
+        <Route path="library" element={<LibraryPage {...appState} />} />
         <Route path="discover" element={<DiscoverPage {...appState} />} />
         <Route path="browse" element={<BrowsePage {...appState} />} />
         <Route path="search" element={<SearchPage {...appState} />} />
@@ -1069,6 +1072,79 @@ function BrowsePage({ savedIds, toggleSaved, library }) {
             <MediaGrid items={filtered} savedIds={savedIds} toggleSaved={toggleSaved} />
           ) : (
             <EmptyState title={library?.loading ? "Loading Jellyfin library" : "No Jellyfin titles found"} />
+          )}
+        </TabsContent>
+      </Tabs>
+    </PageFrame>
+  );
+}
+
+function LibraryPage({ savedIds, toggleSaved, session, library }) {
+  const [state, setState] = useState({ loading: true, error: "", categories: [], items: [] });
+  const [activeTab, setActiveTab] = useState("all");
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadLibraryCategories() {
+      if (!session?.accessToken) return;
+
+      setState((current) => ({ ...current, loading: true, error: "" }));
+
+      try {
+        const data = await apiRequest("/api/jellyfin/library", { token: session.accessToken });
+        if (!active) return;
+        setState({
+          loading: false,
+          error: "",
+          categories: data.categories || [],
+          items: data.items || [],
+        });
+      } catch (error) {
+        if (!active) return;
+        setState({ loading: false, error: error.message, categories: [], items: [] });
+      }
+    }
+
+    loadLibraryCategories();
+
+    return () => {
+      active = false;
+    };
+  }, [session?.accessToken]);
+
+  const fallbackItems = getLibraryItems(library);
+  const allItems = state.items.length > 0 ? state.items : fallbackItems;
+  const activeCategory = state.categories.find((category) => category.id === activeTab);
+  const visibleItems = activeTab === "all" ? allItems : activeCategory?.items || [];
+
+  return (
+    <PageFrame>
+      <PageHeader
+        eyebrow="Library"
+        title="Jellyfin Library"
+        description="Browse your Jellyfin libraries by server category."
+      />
+      {state.error && <LibraryNotice message={state.error} />}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
+        <ScrollArea className="max-w-full whitespace-nowrap">
+          <TabsList>
+            <TabsTrigger value="all">All</TabsTrigger>
+            {state.categories.map((category) => (
+              <TabsTrigger key={category.id} value={category.id}>
+                {category.name}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
+        <TabsContent value={activeTab}>
+          {state.loading ? (
+            <EmptyState title="Loading Jellyfin library" />
+          ) : visibleItems.length > 0 ? (
+            <MediaGrid items={visibleItems} savedIds={savedIds} toggleSaved={toggleSaved} />
+          ) : (
+            <EmptyState title="No titles in this category" />
           )}
         </TabsContent>
       </Tabs>

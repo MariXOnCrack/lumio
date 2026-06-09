@@ -15,6 +15,7 @@ const envJellyfinUrl = normalizeServerUrl(process.env.JELLYFIN_SERVER_URL || "")
 const itemFields = [
   "BackdropImageTags",
   "CommunityRating",
+  "DateCreated",
   "Genres",
   "ImageTags",
   "MediaSources",
@@ -152,6 +153,15 @@ async function handleApi(request, response, requestUrl) {
     const token = getLumioToken(request, requestUrl);
     const user = await getJellyfinUser(serverUrl, token);
     const library = await getJellyfinHome(serverUrl, user.Id, token);
+    sendJson(response, 200, library);
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/jellyfin/library") {
+    const serverUrl = await requireConfiguredServerUrl();
+    const token = getLumioToken(request, requestUrl);
+    const user = await getJellyfinUser(serverUrl, token);
+    const library = await getJellyfinLibrary(serverUrl, user.Id, token);
     sendJson(response, 200, library);
     return;
   }
@@ -323,11 +333,15 @@ async function getJellyfinHome(serverUrl, userId, token) {
       ImageTypeLimit: "1",
       Limit: "80",
     }), { headers }),
-    jellyfinFetch(serverUrl, jellyfinRoute(`/Users/${encodeURIComponent(userId)}/Items/Latest`, {
+    jellyfinFetch(serverUrl, jellyfinRoute("/Items", {
+      UserId: userId,
+      Recursive: "true",
       IncludeItemTypes: "Movie,Series",
+      SortBy: "DateCreated",
+      SortOrder: "Descending",
       Fields: itemFields,
       ImageTypeLimit: "1",
-      Limit: "24",
+      Limit: "10",
     }), { headers }),
     jellyfinFetch(serverUrl, jellyfinRoute("/UserItems/Resume", {
       UserId: userId,
@@ -348,7 +362,7 @@ async function getJellyfinHome(serverUrl, userId, token) {
   const genres = [...new Set(mergedItems.flatMap((item) => item.genres || []))].sort();
   const rows = [
     { title: "Continue Watching", items: resumeItems },
-    { title: "Latest on Jellyfin", items: latestItems },
+    { title: "Latest", items: latestItems },
     { title: "Movies", items: movies },
     { title: "Series", items: series },
   ].filter((row) => row.items.length > 0);
@@ -357,6 +371,42 @@ async function getJellyfinHome(serverUrl, userId, token) {
     items: mergedItems,
     rows,
     genres,
+  };
+}
+
+async function getJellyfinLibrary(serverUrl, userId, token) {
+  const headers = jellyfinHeaders(token);
+  const viewsData = await jellyfinFetch(serverUrl, `/Users/${encodeURIComponent(userId)}/Views`, { headers });
+  const views = getItemsArray(viewsData)
+    .filter((view) => view.Id && view.Name)
+    .filter((view) => !["livetv", "music", "musicvideos", "playlists", "boxsets", "books"].includes(String(view.CollectionType || "").toLowerCase()));
+
+  const categories = await Promise.all(views.map(async (view) => {
+    const data = await jellyfinFetch(serverUrl, jellyfinRoute("/Items", {
+      UserId: userId,
+      ParentId: view.Id,
+      Recursive: "true",
+      IncludeItemTypes: "Movie,Series",
+      SortBy: "SortName",
+      Fields: itemFields,
+      ImageTypeLimit: "1",
+      Limit: "200",
+    }), { headers });
+
+    return {
+      id: view.Id,
+      name: view.Name,
+      collectionType: view.CollectionType || "",
+      items: getItemsArray(data).map((item) => mapJellyfinItem(item, token)),
+    };
+  }));
+
+  const visibleCategories = categories.filter((category) => category.items.length > 0);
+  const items = mergeItems(visibleCategories.flatMap((category) => category.items));
+
+  return {
+    categories: visibleCategories,
+    items,
   };
 }
 
