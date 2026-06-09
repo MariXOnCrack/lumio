@@ -216,6 +216,12 @@ async function handleApi(request, response, requestUrl) {
     return;
   }
 
+  const subtitleMatch = requestUrl.pathname.match(/^\/api\/jellyfin\/subtitles\/([^/]+)\/([^/]+)\/(\d+)\.vtt$/);
+  if (request.method === "GET" && subtitleMatch) {
+    await proxyJellyfinSubtitle(request, response, requestUrl, subtitleMatch);
+    return;
+  }
+
   const streamMatch = requestUrl.pathname.match(/^\/api\/jellyfin\/stream\/([^/]+)$/);
   if (request.method === "GET" && streamMatch) {
     await proxyJellyfinStream(request, response, requestUrl, decodeURIComponent(streamMatch[1]));
@@ -445,18 +451,41 @@ async function proxyJellyfinImage(request, response, requestUrl, match) {
   });
 }
 
+async function proxyJellyfinSubtitle(request, response, requestUrl, match) {
+  const serverUrl = await requireConfiguredServerUrl();
+  const token = getLumioToken(request, requestUrl);
+  if (!token) {
+    throw httpError(401, "Missing Jellyfin session.");
+  }
+
+  const [, rawItemId, rawMediaSourceId, rawStreamIndex] = match;
+  const itemId = decodeURIComponent(rawItemId);
+  const mediaSourceId = decodeURIComponent(rawMediaSourceId);
+  const streamIndex = decodeURIComponent(rawStreamIndex);
+  const route = jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/${encodeURIComponent(mediaSourceId)}/Subtitles/${encodeURIComponent(streamIndex)}/Stream.vtt`, {
+    api_key: token,
+  });
+
+  await proxyJellyfinBinary(response, `${serverUrl}${route}`, {
+    headers: jellyfinHeaders(token),
+  });
+}
+
 async function proxyJellyfinStream(request, response, requestUrl, itemId) {
   const serverUrl = await requireConfiguredServerUrl();
   const token = getLumioToken(request, requestUrl);
   if (!token) {
     throw httpError(401, "Missing Jellyfin session.");
   }
+
   const mode = requestUrl.searchParams.get("mode") === "transcode" ? "transcode" : "direct";
+  const audioStreamIndex = requestUrl.searchParams.get("audioStreamIndex") || "";
   const route = mode === "transcode"
     ? jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream.mp4`, {
       Static: "false",
       VideoCodec: "h264",
       AudioCodec: "aac,mp3,opus",
+      AudioStreamIndex: audioStreamIndex,
       Container: "mp4",
       TranscodingContainer: "mp4",
       TranscodingProtocol: "http",
@@ -465,6 +494,7 @@ async function proxyJellyfinStream(request, response, requestUrl, itemId) {
     })
     : jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream`, {
       Static: "true",
+      AudioStreamIndex: audioStreamIndex,
       api_key: token,
     });
   const headers = jellyfinHeaders(token);
@@ -623,10 +653,44 @@ function sortSearchItems(items) {
   });
 }
 
+function mapAudioTracks(mediaStreams = []) {
+  return mediaStreams
+    .filter((stream) => stream.Type === "Audio" && stream.Index !== undefined)
+    .map((stream, index) => ({
+      index: stream.Index,
+      displayTitle: stream.DisplayTitle || [
+        stream.Language,
+        stream.Codec ? stream.Codec.toUpperCase() : "",
+        stream.Channels ? `${stream.Channels}ch` : "",
+      ].filter(Boolean).join(" / ") || `Audio ${index + 1}`,
+      language: stream.Language || "",
+      codec: stream.Codec || "",
+      channels: stream.Channels || "",
+      isDefault: Boolean(stream.IsDefault),
+    }));
+}
+
+function mapSubtitleTracks(itemId, mediaSourceId, token, mediaStreams = []) {
+  return mediaStreams
+    .filter((stream) => stream.Type === "Subtitle" && stream.Index !== undefined)
+    .map((stream, index) => ({
+      index: stream.Index,
+      displayTitle: stream.DisplayTitle || stream.Title || stream.Language || `Subtitle ${index + 1}`,
+      language: stream.Language || "",
+      codec: stream.Codec || "",
+      isDefault: Boolean(stream.IsDefault),
+      isExternal: Boolean(stream.IsExternal),
+      url: `/api/jellyfin/subtitles/${encodeURIComponent(itemId)}/${encodeURIComponent(mediaSourceId)}/${encodeURIComponent(stream.Index)}.vtt?token=${encodeURIComponent(token)}`,
+    }));
+}
+
 function mapJellyfinItem(item = {}, token = "", episodes = [], index = 0) {
   const type = mapItemType(item.Type);
   const backdropTag = item.BackdropImageTags?.[0] || "";
   const primaryTag = item.ImageTags?.Primary || "";
+  const mediaSource = item.MediaSources?.[0] || {};
+  const mediaStreams = mediaSource.MediaStreams || item.MediaStreams || [];
+  const mediaSourceId = mediaSource.Id || item.Id || "";
   const fallbackImage = "https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&w=1400&h=780&q=82";
   const backdrop = backdropTag
     ? imageProxyUrl("item", item.Id, "Backdrop", token, { tag: backdropTag, w: 1400, h: 780, index: 0 })
@@ -657,6 +721,9 @@ function mapJellyfinItem(item = {}, token = "", episodes = [], index = 0) {
     description: item.Overview || "No overview is available for this Jellyfin title yet.",
     cast: (item.People || []).slice(0, 5).map((person) => person.Name),
     episodes,
+    mediaSourceId,
+    audioTracks: mapAudioTracks(mediaStreams),
+    subtitleTracks: mapSubtitleTracks(item.Id, mediaSourceId, token, mediaStreams),
     streamUrl: item.Type === "Movie" || item.Type === "Episode" ? `/api/jellyfin/stream/${encodeURIComponent(item.Id)}?token=${encodeURIComponent(token)}&mode=direct` : "",
     episodeNumber: item.IndexNumber || index + 1,
     seasonNumber: item.ParentIndexNumber || "",

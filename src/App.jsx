@@ -16,7 +16,9 @@ import {
   Loader2,
   LogOut,
   Maximize2,
+  Moon,
   Pause,
+  Palette,
   PictureInPicture2,
   Play,
   Plus,
@@ -26,6 +28,7 @@ import {
   Shield,
   Sparkles,
   Star,
+  Sun,
   Tv,
   User,
   Volume2,
@@ -35,6 +38,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -73,6 +77,7 @@ const navItems = [
 
 const adminNavItem = { label: "Jellyfin", path: "/admin", icon: Server };
 const sessionStorageKey = "lumio-jellyfin-session";
+const themeStorageKey = "lumio-theme";
 
 async function apiRequest(path, options = {}) {
   const response = await fetch(path, {
@@ -108,6 +113,22 @@ function writeStoredSession(session) {
   }
 }
 
+function readStoredTheme() {
+  try {
+    return window.localStorage.getItem(themeStorageKey) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function writeStoredTheme(theme) {
+  try {
+    window.localStorage.setItem(themeStorageKey, theme);
+  } catch {
+    // Theme persistence is cosmetic; ignore storage failures.
+  }
+}
+
 function getInitials(name = "User") {
   return name
     .split(/\s+/)
@@ -125,6 +146,7 @@ function App() {
   const [savedIds, setSavedIds] = useState(() => new Set(["midnight-signal", "deep-orbit"]));
   const [config, setConfig] = useState({ configured: false, jellyfinServerUrl: "" });
   const [session, setSession] = useState(() => readStoredSession());
+  const [theme, setTheme] = useState(() => readStoredTheme());
   const [bootState, setBootState] = useState({ loading: true, error: "" });
   const [library, setLibrary] = useState({ loading: false, error: "", items: [], rows: [], genres: [] });
 
@@ -144,6 +166,12 @@ function App() {
   const saved = useMemo(() => activeItems.filter((item) => savedIds.has(item.id)), [activeItems, savedIds]);
   const isAdmin = Boolean(session?.user?.isAdmin);
   const appState = { savedIds, saved, toggleSaved, config, session, library };
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    writeStoredTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     let active = true;
@@ -242,14 +270,14 @@ function App() {
 
   return (
     <Routes>
-      <Route element={<Shell config={config} session={session} onLogout={handleLogout} />}>
+      <Route element={<Shell config={config} session={session} theme={theme} onThemeChange={setTheme} onLogout={handleLogout} />}>
         <Route index element={<HomePage {...appState} />} />
         <Route path="library" element={<LibraryPage {...appState} />} />
         <Route path="discover" element={<DiscoverPage {...appState} />} />
         <Route path="browse" element={<BrowsePage {...appState} />} />
         <Route path="search" element={<SearchPage {...appState} />} />
         <Route path="my-list" element={<MyListPage {...appState} />} />
-        <Route path="admin" element={isAdmin ? <AdminPage config={config} session={session} onConfigSaved={setConfig} /> : <Navigate to="/" replace />} />
+        <Route path="admin" element={isAdmin ? <AdminPage config={config} session={session} library={library} theme={theme} onThemeChange={setTheme} onConfigSaved={setConfig} /> : <Navigate to="/" replace />} />
         <Route path="title/:id" element={<TitlePage {...appState} />} />
       </Route>
       <Route path="watch/:id" element={<WatchPage library={library} session={session} />} />
@@ -258,7 +286,7 @@ function App() {
   );
 }
 
-function Shell({ config, session, onLogout }) {
+function Shell({ config, session, theme, onThemeChange, onLogout }) {
   const visibleNavItems = session?.user?.isAdmin ? [...navItems, adminNavItem] : navItems;
 
   return (
@@ -270,11 +298,11 @@ function Shell({ config, session, onLogout }) {
             <NavLink key={item.label} item={item} />
           ))}
         </nav>
-        <SidebarAccount config={config} session={session} onLogout={onLogout} />
+        <SidebarAccount config={config} session={session} theme={theme} onThemeChange={onThemeChange} onLogout={onLogout} />
       </aside>
 
       <div className="lg:pl-[76px]">
-        <Topbar config={config} session={session} onLogout={onLogout} />
+        <Topbar config={config} session={session} theme={theme} onThemeChange={onThemeChange} onLogout={onLogout} />
         <main className="px-3 pb-24 pt-4 sm:px-4 lg:px-6 lg:pb-10 2xl:px-8">
           <Outlet />
         </main>
@@ -295,17 +323,40 @@ function Brand() {
   );
 }
 
-function SidebarAccount({ config, session, onLogout }) {
+function SidebarAccount({ config, session, theme, onThemeChange, onLogout }) {
   return (
-    <div className="sidebar-account border-t pt-4">
-      <ProfileMenu config={config} session={session} triggerClassName="h-14 w-full justify-start gap-3 px-2" showName onLogout={onLogout} />
+    <div className="sidebar-footer grid gap-4">
+      <ThemeToggle theme={theme} onThemeChange={onThemeChange} />
+      <div className="sidebar-account border-t pt-4">
+        <ProfileMenu config={config} session={session} theme={theme} onThemeChange={onThemeChange} triggerClassName="h-14 w-full justify-start gap-3 px-2" showName onLogout={onLogout} />
+      </div>
     </div>
   );
 }
 
-function ProfileMenu({ config, session, triggerClassName, showName = false, onLogout }) {
+function ThemeToggle({ theme, onThemeChange }) {
+  const isLight = theme === "light";
+  const Icon = isLight ? Moon : Sun;
+  const label = isLight ? "Dark mode" : "Light mode";
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className="sidebar-theme-toggle h-11 w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      onClick={() => onThemeChange(isLight ? "dark" : "light")}
+      aria-label={`Switch to ${label}`}
+    >
+      <Icon className="size-4" />
+      <span className="sidebar-label">{label}</span>
+    </Button>
+  );
+}
+
+function ProfileMenu({ config, session, theme, onThemeChange, triggerClassName, showName = false, onLogout }) {
   const userName = session?.user?.name || "Jellyfin User";
   const isAdmin = Boolean(session?.user?.isAdmin);
+  const nextTheme = theme === "light" ? "dark" : "light";
 
   return (
     <DropdownMenu>
@@ -339,6 +390,16 @@ function ProfileMenu({ config, session, triggerClassName, showName = false, onLo
           <User className="size-4" />
           Account
         </DropdownMenuItem>
+        {onThemeChange && (
+          <DropdownMenuItem
+            onSelect={() => {
+              onThemeChange(nextTheme);
+            }}
+          >
+            {theme === "light" ? <Moon className="size-4" /> : <Sun className="size-4" />}
+            {nextTheme === "light" ? "Light mode" : "Dark mode"}
+          </DropdownMenuItem>
+        )}
         {isAdmin && (
           <DropdownMenuItem asChild>
             <Link to="/admin">
@@ -386,7 +447,7 @@ function NavLink({ item }) {
   );
 }
 
-function Topbar({ config, session, onLogout }) {
+function Topbar({ config, session, theme, onThemeChange, onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [query, setQuery] = useState("");
@@ -420,7 +481,7 @@ function Topbar({ config, session, onLogout }) {
 
   const searchInput = (
     <>
-      <Search className="pointer-events-none absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-white/58" />
+      <Search className="pointer-events-none absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={query}
         onChange={(event) => updateQuery(event.target.value)}
@@ -454,7 +515,7 @@ function Topbar({ config, session, onLogout }) {
           </Button>
         </div>
         <div className="col-start-4 flex justify-end lg:hidden">
-          <ProfileMenu config={config} session={session} triggerClassName="h-11 px-1" onLogout={onLogout} />
+          <ProfileMenu config={config} session={session} theme={theme} onThemeChange={onThemeChange} triggerClassName="h-11 px-1" onLogout={onLogout} />
         </div>
         {mobileSearchOpen && (
           <form
@@ -611,11 +672,40 @@ function LoginPage({ config, onLogin }) {
   );
 }
 
-function AdminPage({ config, session, onConfigSaved }) {
+function AdminPage({ config, session, library, theme, onThemeChange, onConfigSaved }) {
   const [serverUrl, setServerUrl] = useState(config.jellyfinServerUrl);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [health, setHealth] = useState({ loading: true, api: false, jellyfin: false, checkedAt: "", message: "" });
+  const normalizedServerUrl = normalizeInputUrl(serverUrl);
+  const serverChanged = normalizedServerUrl !== config.jellyfinServerUrl;
+  const userName = session?.user?.name || "Jellyfin User";
+  const libraryItems = library?.items?.length || 0;
+  const libraryRows = library?.rows?.length || 0;
+  const libraryGenres = library?.genres?.length || 0;
+  const allHealthy = health.api && health.jellyfin;
+
+  const refreshHealth = useCallback(async () => {
+    setHealth((current) => ({ ...current, loading: true, message: "" }));
+
+    const [apiResult, userResult] = await Promise.allSettled([
+      apiRequest("/api/health"),
+      apiRequest("/api/jellyfin/me", { token: session.accessToken }),
+    ]);
+
+    setHealth({
+      loading: false,
+      api: apiResult.status === "fulfilled" && Boolean(apiResult.value?.ok),
+      jellyfin: userResult.status === "fulfilled",
+      checkedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      message: userResult.status === "rejected" ? userResult.reason.message : "",
+    });
+  }, [session.accessToken]);
+
+  useEffect(() => {
+    refreshHealth();
+  }, [refreshHealth]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -627,11 +717,12 @@ function AdminPage({ config, session, onConfigSaved }) {
       const nextConfig = await apiRequest("/api/config", {
         method: "PUT",
         token: session.accessToken,
-        body: JSON.stringify({ jellyfinServerUrl: normalizeInputUrl(serverUrl) }),
+        body: JSON.stringify({ jellyfinServerUrl: normalizedServerUrl }),
       });
       onConfigSaved(nextConfig);
       setServerUrl(nextConfig.jellyfinServerUrl);
       setStatus("Jellyfin server URL saved.");
+      refreshHealth();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -643,37 +734,210 @@ function AdminPage({ config, session, onConfigSaved }) {
     <PageFrame>
       <PageHeader
         eyebrow="Admin"
-        title="Jellyfin Connection"
-        description="Only Jellyfin admins can change the server Lumio uses for user login."
+        title="Lumio Admin"
+        description="Jellyfin connection, access, and appearance controls for this frontend."
       />
-      <section className="admin-panel mt-6 max-w-2xl animate-reveal-up">
-        <div className="flex items-start gap-3">
-          <span className="grid size-10 shrink-0 place-items-center rounded-md bg-secondary text-primary">
-            <Shield className="size-5" />
-          </span>
-          <div>
-            <h2 className="text-lg font-black">Server URL</h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Docker installs can also set this initially with <span className="font-mono text-foreground">JELLYFIN_SERVER_URL</span>.
-            </p>
-          </div>
-        </div>
-        <form className="mt-6 grid gap-4" onSubmit={submit}>
-          <label className="grid gap-2 text-sm font-bold">
-            Jellyfin server URL
-            <Input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} type="url" required />
-          </label>
-          {status && <p className="text-sm font-semibold text-primary">{status}</p>}
-          {error && <p className="text-sm font-semibold text-destructive">{error}</p>}
-          <div>
-            <Button type="submit" disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" /> : <Server />}
-              Save Jellyfin URL
-            </Button>
-          </div>
-        </form>
+
+      <section className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <AdminMetric icon={Server} label="Connection" value={health.loading ? "Checking" : allHealthy ? "Online" : "Review"} detail={config.jellyfinServerUrl || "Not configured"} />
+        <AdminMetric icon={Shield} label="Access" value={session?.user?.isAdmin ? "Admin" : "User"} detail={userName} />
+        <AdminMetric icon={LibraryIcon} label="Library" value={`${libraryItems} titles`} detail={`${libraryRows} rows, ${libraryGenres} genres`} />
+        <AdminMetric icon={theme === "light" ? Sun : Moon} label="Theme" value={theme === "light" ? "Light" : "Dark"} detail="Subtle neutral palette" />
       </section>
+
+      <Tabs defaultValue="overview" className="mt-6 animate-reveal-up">
+        <TabsList className="admin-tabs-list h-auto flex-wrap justify-start">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="connection">Connection</TabsTrigger>
+          <TabsTrigger value="access">Access</TabsTrigger>
+          <TabsTrigger value="appearance">Appearance</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="mt-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+            <Card className="admin-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Server className="size-4 text-muted-foreground" />
+                  System Status
+                </CardTitle>
+                <CardDescription>Live checks against the Lumio API and the active Jellyfin session.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <AdminInfoRow label="Lumio API" value={health.loading ? "Checking" : health.api ? "Healthy" : "Unavailable"} tone={health.api ? "good" : "warning"} />
+                <AdminInfoRow label="Jellyfin session" value={health.loading ? "Checking" : health.jellyfin ? "Authenticated" : "Needs login"} tone={health.jellyfin ? "good" : "warning"} />
+                <AdminInfoRow label="Last check" value={health.checkedAt || "Pending"} />
+                {health.message && <p className="admin-alert text-destructive">{health.message}</p>}
+                <div>
+                  <Button type="button" variant="secondary" onClick={refreshHealth} disabled={health.loading}>
+                    {health.loading ? <Loader2 className="animate-spin" /> : <Server />}
+                    Refresh status
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="admin-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <LibraryIcon className="size-4 text-muted-foreground" />
+                  Library Snapshot
+                </CardTitle>
+                <CardDescription>What Lumio has currently loaded from Jellyfin.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <AdminInfoRow label="Titles" value={String(libraryItems)} />
+                <AdminInfoRow label="Rows" value={String(libraryRows)} />
+                <AdminInfoRow label="Genres" value={String(libraryGenres)} />
+                <AdminInfoRow label="Latest row" value={(library?.rows || []).find((row) => row.title === "Latest") ? "Available" : "Not loaded"} />
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="connection" className="mt-4">
+          <Card className="admin-card max-w-3xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Server className="size-4 text-muted-foreground" />
+                Jellyfin Server
+              </CardTitle>
+              <CardDescription>Only Jellyfin admins can change the server Lumio uses for login and media requests.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="grid gap-4" onSubmit={submit}>
+                <label className="grid gap-2 text-sm font-bold">
+                  Jellyfin server URL
+                  <Input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} type="url" required />
+                </label>
+                <div className="grid gap-2 rounded-md bg-muted/50 p-3 text-sm">
+                  <AdminInfoRow label="Current" value={config.jellyfinServerUrl || "Not configured"} />
+                  <AdminInfoRow label="Preview" value={normalizedServerUrl || "Waiting for URL"} />
+                  <AdminInfoRow label="Docker seed" value="JELLYFIN_SERVER_URL" />
+                </div>
+                {status && <p className="admin-alert text-primary">{status}</p>}
+                {error && <p className="admin-alert text-destructive">{error}</p>}
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={saving || !serverChanged}>
+                    {saving ? <Loader2 className="animate-spin" /> : <Server />}
+                    Save Jellyfin URL
+                  </Button>
+                  <Button type="button" variant="secondary" disabled={!serverChanged || saving} onClick={() => setServerUrl(config.jellyfinServerUrl)}>
+                    Reset
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="access" className="mt-4">
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Card className="admin-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="size-4 text-muted-foreground" />
+                  Admin Gate
+                </CardTitle>
+                <CardDescription>Configuration is limited to Jellyfin administrators.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-sm text-muted-foreground">
+                <Badge className="w-fit">{session?.user?.isAdmin ? "Admin verified" : "Standard user"}</Badge>
+                <p>Regular Jellyfin users can sign in and stream, but the admin route redirects away unless Jellyfin marks the account as an administrator.</p>
+              </CardContent>
+            </Card>
+
+            <Card className="admin-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <User className="size-4 text-muted-foreground" />
+                  Active Session
+                </CardTitle>
+                <CardDescription>The frontend profile Lumio is using now.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <AdminInfoRow label="User" value={userName} />
+                <AdminInfoRow label="Role" value={session?.user?.isAdmin ? "Jellyfin admin" : "Jellyfin user"} />
+                <AdminInfoRow label="Profile image" value={session?.user?.profileImage ? "Loaded" : "Fallback initials"} />
+              </CardContent>
+            </Card>
+
+            <Card className="admin-card">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <KeyRound className="size-4 text-muted-foreground" />
+                  Login Flow
+                </CardTitle>
+                <CardDescription>Users authenticate directly through Jellyfin.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 text-sm text-muted-foreground">
+                <p>Lumio stores the Jellyfin access token locally for the browser session and sends it to the Lumio proxy for images, media, subtitles, and library data.</p>
+                <p>Changing the server URL affects future login and library requests.</p>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="appearance" className="mt-4">
+          <Card className="admin-card max-w-3xl">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Palette className="size-4 text-muted-foreground" />
+                Theme
+              </CardTitle>
+              <CardDescription>Light and dark stay neutral so the media artwork keeps doing the visual work.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Button type="button" variant={theme === "dark" ? "default" : "outline"} className="admin-theme-choice" onClick={() => onThemeChange("dark")}>
+                  <Moon className="size-4" />
+                  <span>
+                    <span className="block text-left font-bold">Dark mode</span>
+                    <span className="block text-left text-xs opacity-70">Black and charcoal base</span>
+                  </span>
+                </Button>
+                <Button type="button" variant={theme === "light" ? "default" : "outline"} className="admin-theme-choice" onClick={() => onThemeChange("light")}>
+                  <Sun className="size-4" />
+                  <span>
+                    <span className="block text-left font-bold">Light mode</span>
+                    <span className="block text-left text-xs opacity-70">Soft grey workspace</span>
+                  </span>
+                </Button>
+              </div>
+              <p className="text-sm leading-6 text-muted-foreground">
+                The sidebar switch uses the same setting and saves it locally, so the chosen theme survives refreshes.
+              </p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </PageFrame>
+  );
+}
+
+function AdminMetric({ icon: Icon, label, value, detail }) {
+  return (
+    <Card className="admin-card admin-metric-card">
+      <CardContent className="flex items-center gap-3 p-4">
+        <span className="grid size-10 shrink-0 place-items-center rounded-md bg-secondary text-primary">
+          <Icon className="size-4" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-xs font-bold uppercase text-muted-foreground">{label}</span>
+          <span className="block truncate text-lg font-black">{value}</span>
+          <span className="block truncate text-xs text-muted-foreground">{detail}</span>
+        </span>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AdminInfoRow({ label, value, tone = "default" }) {
+  return (
+    <div className="flex items-center justify-between gap-4 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn("min-w-0 truncate text-right font-bold", tone === "good" && "text-primary", tone === "warning" && "text-destructive")}>{value}</span>
+    </div>
   );
 }
 
@@ -780,37 +1044,10 @@ function HeroCarousel({ items = media, savedIds, toggleSaved }) {
       <div className="media-mask-wide absolute -inset-x-8 -bottom-14 -top-10" />
 
       <div className="relative flex min-h-[400px] px-5 py-6 sm:min-h-[450px] sm:px-8 sm:py-8 lg:min-h-[510px] lg:px-10 lg:py-10 2xl:px-12">
-        <div key={active.id} className="flex max-w-5xl flex-col justify-end pb-7 sm:pb-8">
-          <div className="animate-text-load flex flex-wrap gap-2" style={{ animationDelay: "40ms" }}>
-            <Badge>{active.type}</Badge>
-            <Badge variant="secondary">{active.year}</Badge>
-            <Badge variant="secondary">{active.maturity}</Badge>
-            <Badge variant="secondary">{active.duration}</Badge>
-          </div>
-          <h1 className="animate-text-load mt-4 max-w-[13ch] text-4xl font-black leading-tight sm:mt-5 sm:text-6xl lg:text-7xl" style={{ animationDelay: "110ms" }}>
+        <div key={active.id} className="flex max-w-5xl flex-col justify-end pb-14 sm:pb-16">
+          <h1 className="animate-text-load max-w-[13ch] text-4xl font-black leading-tight sm:text-6xl lg:text-7xl" style={{ animationDelay: "80ms" }}>
             {active.title}
           </h1>
-          <p className="scrollable-description animate-text-load mt-3 max-w-2xl text-sm text-muted-foreground sm:mt-4 sm:text-lg" style={{ animationDelay: "180ms" }}>
-            {active.description}
-          </p>
-          <div className="animate-text-load mt-5 flex flex-wrap gap-2 sm:mt-6 sm:gap-3" style={{ animationDelay: "250ms" }}>
-            <Button asChild size="lg">
-              <Link to={`/watch/${active.id}`}>
-                <Play className="fill-current" />
-                Play
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" size="lg">
-              <Link to={`/title/${active.id}`}>
-                <Info />
-                More Info
-              </Link>
-            </Button>
-            <Button variant="outline" size="lg" onClick={() => toggleSaved(active.id)}>
-              {savedIds.has(active.id) ? <Check /> : <Plus />}
-              {savedIds.has(active.id) ? "Saved" : "My List"}
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -1638,9 +1875,28 @@ function getPlaybackItem(item) {
     || item;
 }
 
-function getJellyfinStreamUrl(item, token, mode) {
+function getJellyfinStreamUrl(item, token, mode, audioStreamIndex = "") {
   if (!item?.id || item.source !== "jellyfin" || !token) return "";
-  return `/api/jellyfin/stream/${encodeURIComponent(item.id)}?token=${encodeURIComponent(token)}&mode=${mode}`;
+
+  const params = new URLSearchParams({
+    token,
+    mode,
+  });
+
+  if (audioStreamIndex !== "" && audioStreamIndex !== "default") {
+    params.set("audioStreamIndex", audioStreamIndex);
+  }
+
+  return `/api/jellyfin/stream/${encodeURIComponent(item.id)}?${params.toString()}`;
+}
+
+function getDefaultTrackValue(tracks = [], fallback = "default") {
+  const track = tracks.find((item) => item.isDefault) || tracks[0];
+  return track ? String(track.index) : fallback;
+}
+
+function getTrackByValue(tracks = [], value) {
+  return tracks.find((track) => String(track.index) === String(value)) || null;
 }
 
 function WatchPage({ library, session }) {
@@ -1659,8 +1915,8 @@ function WatchPage({ library, session }) {
   const [statsOpen, setStatsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState("root");
-  const [captions, setCaptions] = useState("English");
-  const [voice, setVoice] = useState("Original");
+  const [captions, setCaptions] = useState("off");
+  const [audioTrack, setAudioTrack] = useState("default");
   const [speed, setSpeed] = useState(1);
   const [pipActive, setPipActive] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1669,6 +1925,8 @@ function WatchPage({ library, session }) {
   const [playerMenuContainer, setPlayerMenuContainer] = useState(null);
   const [playbackMode, setPlaybackMode] = useState("direct");
   const [playbackError, setPlaybackError] = useState("");
+  const [mediaReady, setMediaReady] = useState(false);
+  const [buffering, setBuffering] = useState(false);
   const lastActivityRef = useRef(0);
 
   useEffect(() => {
@@ -1703,19 +1961,27 @@ function WatchPage({ library, session }) {
   const missingItem = !detailState.loading && !detailState.item && !baseItem;
   const playbackItem = getPlaybackItem(item);
   const episode = playbackItem?.id !== item.id ? playbackItem : { ...item, title: item.title, runtime: item.duration, progress: item.progress || 0 };
-  const streamUrl = getJellyfinStreamUrl(playbackItem, session?.accessToken, playbackMode) || playbackItem?.streamUrl || item.streamUrl || "";
+  const audioTracks = playbackItem?.audioTracks || [];
+  const subtitleTracks = playbackItem?.subtitleTracks || [];
+  const selectedAudioTrack = getTrackByValue(audioTracks, audioTrack);
+  const selectedSubtitleTrack = getTrackByValue(subtitleTracks, captions);
+  const audioLabel = selectedAudioTrack?.displayTitle || "Auto";
+  const captionsLabel = selectedSubtitleTrack?.displayTitle || "Off";
+  const streamUrl = getJellyfinStreamUrl(playbackItem, session?.accessToken, playbackMode, selectedAudioTrack?.index ?? "") || playbackItem?.streamUrl || item.streamUrl || "";
   const hasVideo = Boolean(streamUrl);
   const durationSeconds = mediaDuration || timeToSeconds(episode.runtime || episode.duration || item.duration);
   const startTime = Math.round(((episode.progress || item.progress || 0) / 100) * durationSeconds);
   const progressPercent = durationSeconds > 0 ? Math.min(100, (currentTime / durationSeconds) * 100) : 0;
   const effectiveVolume = muted ? 0 : volume;
-  const controlsHidden = !controlsVisible && isPlaying && !statsOpen && !settingsOpen;
+  const mediaLoading = hasVideo && !playbackError && (!mediaReady || buffering);
+  const controlsHidden = !controlsVisible && !statsOpen && !settingsOpen && !playbackError;
   const subtitleSamples = [
     "The signal is clean. Keep the relay open.",
     "Stay low. The city is listening now.",
     "If this reaches tomorrow, we still have time.",
   ];
   const subtitleText = subtitleSamples[Math.floor(currentTime / 7) % subtitleSamples.length];
+  const showMockSubtitles = !hasVideo && captions !== "off";
 
   const revealControls = useCallback(() => {
     const now = Date.now();
@@ -1729,9 +1995,13 @@ function WatchPage({ library, session }) {
   useEffect(() => {
     setCurrentTime(startTime);
     setMediaDuration(0);
-    setIsPlaying(false);
+    setIsPlaying(Boolean(playbackItem?.source === "jellyfin"));
+    setAudioTrack(getDefaultTrackValue(playbackItem?.audioTracks, "default"));
+    setCaptions(getDefaultTrackValue(playbackItem?.subtitleTracks, "off"));
     setPlaybackMode("direct");
     setPlaybackError("");
+    setMediaReady(false);
+    setBuffering(Boolean(playbackItem?.source === "jellyfin"));
     setControlsVisible(true);
   }, [playbackItem?.id, startTime]);
 
@@ -1767,6 +2037,12 @@ function WatchPage({ library, session }) {
   }, [hasVideo, isPlaying, streamUrl]);
 
   useEffect(() => {
+    if (!hasVideo) return;
+    setMediaReady(false);
+    setBuffering(true);
+  }, [hasVideo, streamUrl]);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video || !hasVideo) return;
 
@@ -1776,7 +2052,38 @@ function WatchPage({ library, session }) {
   }, [effectiveVolume, hasVideo, muted, speed]);
 
   useEffect(() => {
-    if (!isPlaying || statsOpen || settingsOpen) {
+    const video = videoRef.current;
+    if (!video || !hasVideo) return undefined;
+
+    const applyTextTracks = () => {
+      for (const track of Array.from(video.textTracks)) {
+        track.mode = selectedSubtitleTrack && track.label === selectedSubtitleTrack.displayTitle ? "showing" : "disabled";
+      }
+    };
+
+    const timer = window.setTimeout(applyTextTracks, 0);
+    return () => window.clearTimeout(timer);
+  }, [captions, hasVideo, selectedSubtitleTrack?.displayTitle, streamUrl]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.code !== "Space") return;
+
+      const target = event.target;
+      const tagName = target?.tagName;
+      if (target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tagName)) return;
+
+      event.preventDefault();
+      revealControls();
+      setIsPlaying((value) => !value);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [revealControls]);
+
+  useEffect(() => {
+    if (statsOpen || settingsOpen || playbackError) {
       setControlsVisible(true);
       return undefined;
     }
@@ -1786,7 +2093,7 @@ function WatchPage({ library, session }) {
     }, 2600);
 
     return () => window.clearTimeout(timer);
-  }, [activityTick, isPlaying, settingsOpen, statsOpen]);
+  }, [activityTick, playbackError, settingsOpen, statsOpen]);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -1826,30 +2133,66 @@ function WatchPage({ library, session }) {
             className="player-backdrop absolute inset-0 size-full object-cover"
             poster={playbackItem.backdrop || item.backdrop}
             src={streamUrl}
+            autoPlay
             playsInline
+            onLoadStart={() => {
+              setMediaReady(false);
+              setBuffering(true);
+            }}
             onLoadedMetadata={(event) => {
               const duration = event.currentTarget.duration;
               if (Number.isFinite(duration)) {
                 setMediaDuration(duration);
-                if (startTime > 0 && event.currentTarget.currentTime < 1) {
-                  event.currentTarget.currentTime = startTime;
-                  setCurrentTime(startTime);
+                const targetTime = currentTime > 1 ? currentTime : startTime;
+                if (targetTime > 0 && event.currentTarget.currentTime < 1) {
+                  event.currentTarget.currentTime = targetTime;
+                  setCurrentTime(targetTime);
                 }
               }
             }}
+            onLoadedData={() => {
+              setMediaReady(true);
+              setBuffering(false);
+            }}
+            onCanPlay={() => {
+              setMediaReady(true);
+              setBuffering(false);
+            }}
+            onPlaying={() => {
+              setIsPlaying(true);
+              setMediaReady(true);
+              setBuffering(false);
+            }}
+            onPause={() => setIsPlaying(false)}
+            onWaiting={() => setBuffering(true)}
+            onStalled={() => setBuffering(true)}
             onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
             onEnded={() => setIsPlaying(false)}
             onError={() => {
               if (playbackMode === "direct") {
                 setPlaybackMode("transcode");
                 setPlaybackError("");
+                setMediaReady(false);
+                setBuffering(true);
                 setIsPlaying(true);
               } else {
                 setPlaybackError("Jellyfin could not provide a browser-playable stream for this item.");
+                setBuffering(false);
                 setIsPlaying(false);
               }
             }}
-          />
+          >
+            {selectedSubtitleTrack && (
+              <track
+                key={`${selectedSubtitleTrack.index}-${selectedSubtitleTrack.url}`}
+                default
+                kind="subtitles"
+                label={selectedSubtitleTrack.displayTitle}
+                src={selectedSubtitleTrack.url}
+                srcLang={selectedSubtitleTrack.language || "und"}
+              />
+            )}
+          </video>
         ) : (
           <MediaImage className="player-backdrop absolute inset-0" imageClassName="scale-[1.02]" src={item.backdrop} loading="eager" />
         )}
@@ -1868,9 +2211,18 @@ function WatchPage({ library, session }) {
           </button>
         </header>
 
-        {captions !== "Off" && (
+        {showMockSubtitles && (
           <div className="player-subtitles" aria-live="polite">
             <span>{subtitleText}</span>
+          </div>
+        )}
+
+        {mediaLoading && (
+          <div className="player-loading" role="status" aria-label="Media loading">
+            <Loader2 className="size-4 animate-spin text-white/70" />
+            <div className="player-loading-track">
+              <span />
+            </div>
           </div>
         )}
 
@@ -1966,10 +2318,11 @@ function WatchPage({ library, session }) {
                       ["Stream", "HLS / adaptive"],
                       ["Resolution", "1920x1080"],
                       ["Video codec", "H.264 AVC"],
-                      ["Audio", `${voice} / stereo`],
-                      ["Transcoding", "1080p ready"],
+                      ["Audio", audioLabel],
+                      ["Subtitles", captionsLabel],
+                      ["Transcoding", playbackMode === "transcode" ? "Active" : "Direct"],
                       ["Bitrate", "8.2 Mbps"],
-                      ["Buffer", "38 seconds"],
+                      ["Buffer", buffering ? "Loading" : "Ready"],
                       ["CDN edge", "Amsterdam"],
                       ["Dropped frames", "0"],
                       ["Playback speed", `${speed}x`],
@@ -2009,13 +2362,13 @@ function WatchPage({ library, session }) {
                       <button type="button" className="player-menu-button" onClick={() => setSettingsPanel("captions")}>
                         <Captions className="size-4 text-white/55" />
                         Captions
-                        <span className="flex-1 text-right text-xs text-white/42">{captions}</span>
+                        <span className="min-w-0 flex-1 truncate text-right text-xs text-white/42">{captionsLabel}</span>
                         <ChevronLeft className="size-4 rotate-180 text-white/35" />
                       </button>
                       <button type="button" className="player-menu-button" onClick={() => setSettingsPanel("voice")}>
                         <Volume2 className="size-4 text-white/55" />
-                        Voice
-                        <span className="flex-1 text-right text-xs text-white/42">{voice}</span>
+                        Audio
+                        <span className="min-w-0 flex-1 truncate text-right text-xs text-white/42">{audioLabel}</span>
                         <ChevronLeft className="size-4 rotate-180 text-white/35" />
                       </button>
                       <button type="button" className="player-menu-button" onClick={() => setSettingsPanel("speed")}>
@@ -2030,24 +2383,43 @@ function WatchPage({ library, session }) {
                       <button type="button" className="player-menu-button" onClick={() => setSettingsPanel("root")}>
                         <ChevronLeft className="size-4 text-white/55" />
                         {settingsPanel === "captions" && "Captions"}
-                        {settingsPanel === "voice" && "Voice"}
+                        {settingsPanel === "voice" && "Audio"}
                         {settingsPanel === "speed" && "Speed"}
                       </button>
                       <DropdownMenuSeparator className="bg-white/10" />
                       {settingsPanel === "captions" && (
                         <DropdownMenuRadioGroup value={captions} onValueChange={setCaptions}>
-                          {["Off", "English", "Dutch"].map((option) => (
-                            <DropdownMenuRadioItem key={option} value={option} className="player-radio-item" onSelect={(event) => event.preventDefault()}>
-                              {option}
+                          <DropdownMenuRadioItem value="off" className="player-radio-item" onSelect={(event) => event.preventDefault()}>
+                            Off
+                          </DropdownMenuRadioItem>
+                          {subtitleTracks.length === 0 && (
+                            <div className="px-2 py-1.5 text-xs font-medium text-white/36">No subtitle tracks</div>
+                          )}
+                          {subtitleTracks.map((option) => (
+                            <DropdownMenuRadioItem key={option.index} value={String(option.index)} className="player-radio-item" onSelect={(event) => event.preventDefault()}>
+                              <span className="min-w-0 truncate">{option.displayTitle}</span>
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
                       )}
                       {settingsPanel === "voice" && (
-                        <DropdownMenuRadioGroup value={voice} onValueChange={setVoice}>
-                          {["Original", "JP", "Commentary"].map((option) => (
-                            <DropdownMenuRadioItem key={option} value={option} className="player-radio-item" onSelect={(event) => event.preventDefault()}>
-                              {option}
+                        <DropdownMenuRadioGroup
+                          value={audioTrack}
+                          onValueChange={(value) => {
+                            setAudioTrack(value);
+                            setPlaybackError("");
+                            setPlaybackMode(value === "default" ? "direct" : "transcode");
+                            setIsPlaying(true);
+                          }}
+                        >
+                          {audioTracks.length === 0 && (
+                            <DropdownMenuRadioItem value="default" className="player-radio-item" onSelect={(event) => event.preventDefault()}>
+                              Auto
+                            </DropdownMenuRadioItem>
+                          )}
+                          {audioTracks.map((option) => (
+                            <DropdownMenuRadioItem key={option.index} value={String(option.index)} className="player-radio-item" onSelect={(event) => event.preventDefault()}>
+                              <span className="min-w-0 truncate">{option.displayTitle}</span>
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>

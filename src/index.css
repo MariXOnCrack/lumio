@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --background: 0 0% 5%;
     --foreground: 0 0% 96%;
     --card: 0 0% 9%;
@@ -32,6 +33,37 @@
     --sidebar-accent-foreground: 0 0% 96%;
     --sidebar-border: 0 0% 16%;
     --sidebar-ring: 0 0% 92%;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: 0 0% 94%;
+    --foreground: 0 0% 9%;
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 9%;
+    --popover: 0 0% 99%;
+    --popover-foreground: 0 0% 9%;
+    --primary: 0 0% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 88%;
+    --secondary-foreground: 0 0% 12%;
+    --muted: 0 0% 87%;
+    --muted-foreground: 0 0% 42%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 48%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 78%;
+    --input: 0 0% 76%;
+    --ring: 0 0% 16%;
+    --sidebar-background: 0 0% 97%;
+    --sidebar-foreground: 0 0% 36%;
+    --sidebar-primary: 0 0% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 0 0% 88%;
+    --sidebar-accent-foreground: 0 0% 8%;
+    --sidebar-border: 0 0% 80%;
+    --sidebar-ring: 0 0% 16%;
   }
 
   * {
@@ -111,7 +143,8 @@
 
   .sidebar-shell .sidebar-brand,
   .sidebar-nav-link,
-  .sidebar-account button {
+  .sidebar-account button,
+  .sidebar-theme-toggle {
     display: grid !important;
     grid-template-columns: 48px minmax(0, 1fr);
     gap: 0 !important;
@@ -124,6 +157,7 @@
   }
 
   .sidebar-nav-link svg,
+  .sidebar-theme-toggle svg,
   .sidebar-avatar {
     flex-shrink: 0;
     justify-self: center;
@@ -194,16 +228,45 @@
     box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.035), 0 20px 50px hsl(0 0% 0% / 0.22);
   }
 
+  .admin-card {
+    border-color: hsl(var(--border) / 0.9);
+    background: hsl(var(--card) / 0.86);
+    box-shadow: inset 0 1px 0 hsl(var(--foreground) / 0.035), 0 18px 44px hsl(0 0% 0% / 0.16);
+  }
+
+  .admin-metric-card {
+    min-height: 92px;
+  }
+
+  .admin-tabs-list {
+    background: hsl(var(--muted) / 0.72);
+  }
+
+  .admin-alert {
+    border-radius: 0.5rem;
+    background: hsl(var(--muted) / 0.52);
+    padding: 0.65rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 700;
+  }
+
+  .admin-theme-choice {
+    height: auto;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
   .search-glass-input {
     border: 1px solid hsl(var(--border));
     border-radius: 0.65rem;
-    background: hsl(var(--secondary));
-    color: hsl(0 0% 100% / 0.9);
+    background: hsl(var(--secondary) / 0.82);
+    color: hsl(var(--foreground) / 0.9);
     box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.025);
   }
 
   .search-glass-input::placeholder {
-    color: hsl(0 0% 100% / 0.48);
+    color: hsl(var(--muted-foreground));
   }
 
   .search-glass-input:focus-visible {
@@ -319,6 +382,13 @@
     animation: player-backdrop-load 760ms ease both;
   }
 
+  .player-backdrop::cue {
+    background: hsl(0 0% 100% / 0.12);
+    color: hsl(0 0% 100% / 0.96);
+    font-weight: 750;
+    text-shadow: 0 2px 8px hsl(0 0% 0% / 0.6);
+  }
+
   .player-overlay {
     opacity: 1;
     transform: translateY(0);
@@ -375,6 +445,44 @@
 
   .player-watch.is-idle .player-subtitles {
     bottom: clamp(2.25rem, 7vh, 4.5rem);
+  }
+
+  .player-loading {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 28;
+    display: inline-flex;
+    min-width: min(300px, calc(100% - 2rem));
+    align-items: center;
+    gap: 0.75rem;
+    border-radius: 0.5rem;
+    background: hsl(0 0% 0% / 0.24);
+    padding: 0.7rem 0.85rem;
+    color: white;
+    transform: translate(-50%, -50%);
+    backdrop-filter: blur(18px) saturate(130%);
+    box-shadow: 0 18px 44px hsl(0 0% 0% / 0.25), inset 0 1px 0 hsl(0 0% 100% / 0.035);
+    animation: player-loading-load 220ms ease both;
+  }
+
+  .player-loading-track {
+    position: relative;
+    height: 4px;
+    flex: 1;
+    overflow: hidden;
+    border-radius: 999px;
+    background: hsl(0 0% 100% / 0.14);
+  }
+
+  .player-loading-track span {
+    position: absolute;
+    inset-block: 0;
+    left: -40%;
+    width: 40%;
+    border-radius: inherit;
+    background: hsl(0 0% 100% / 0.86);
+    animation: player-loading-bar 960ms ease-in-out infinite;
   }
 
   .player-control {
@@ -696,5 +804,27 @@
   to {
     opacity: 1;
     transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes player-loading-load {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px));
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@keyframes player-loading-bar {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(350%);
   }
 }
