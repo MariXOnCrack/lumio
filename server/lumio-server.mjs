@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +12,21 @@ const configDir = path.resolve(process.env.LUMIO_CONFIG_DIR || path.join(rootDir
 const configPath = path.join(configDir, "lumio-config.json");
 const port = Number(process.env.LUMIO_PORT || process.env.PORT || 3000);
 const envJellyfinUrl = normalizeServerUrl(process.env.JELLYFIN_SERVER_URL || "");
+const itemFields = [
+  "BackdropImageTags",
+  "CommunityRating",
+  "Genres",
+  "ImageTags",
+  "MediaSources",
+  "OfficialRating",
+  "Overview",
+  "People",
+  "PrimaryImageAspectRatio",
+  "ProductionYear",
+  "RunTimeTicks",
+  "SeriesName",
+  "UserData",
+].join(",");
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -114,7 +130,7 @@ async function handleApi(request, response, requestUrl) {
 
     sendJson(response, 200, {
       accessToken: data.AccessToken,
-      user: sanitizeUser(data.User),
+      user: sanitizeUser(data.User, data.AccessToken),
       jellyfinServerUrl: serverUrl,
     });
     return;
@@ -122,11 +138,77 @@ async function handleApi(request, response, requestUrl) {
 
   if (request.method === "GET" && requestUrl.pathname === "/api/jellyfin/me") {
     const serverUrl = await requireConfiguredServerUrl();
-    const user = await getJellyfinUser(serverUrl, getLumioToken(request));
+    const token = getLumioToken(request, requestUrl);
+    const user = await getJellyfinUser(serverUrl, token);
     sendJson(response, 200, {
-      user: sanitizeUser(user),
+      user: sanitizeUser(user, token),
       jellyfinServerUrl: serverUrl,
     });
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/jellyfin/home") {
+    const serverUrl = await requireConfiguredServerUrl();
+    const token = getLumioToken(request, requestUrl);
+    const user = await getJellyfinUser(serverUrl, token);
+    const library = await getJellyfinHome(serverUrl, user.Id, token);
+    sendJson(response, 200, library);
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/api/jellyfin/search") {
+    const serverUrl = await requireConfiguredServerUrl();
+    const token = getLumioToken(request, requestUrl);
+    const user = await getJellyfinUser(serverUrl, token);
+    const query = String(requestUrl.searchParams.get("q") || "").trim();
+
+    if (!query) {
+      sendJson(response, 200, { items: [] });
+      return;
+    }
+
+    const data = await jellyfinFetch(serverUrl, jellyfinRoute("/Items", {
+      UserId: user.Id,
+      Recursive: "true",
+      SearchTerm: query,
+      IncludeItemTypes: "Movie,Series,Episode",
+      Fields: itemFields,
+      ImageTypeLimit: "1",
+      Limit: "60",
+    }), { headers: jellyfinHeaders(token) });
+
+    sendJson(response, 200, { items: getItemsArray(data).map((item) => mapJellyfinItem(item, token)) });
+    return;
+  }
+
+  const itemMatch = requestUrl.pathname.match(/^\/api\/jellyfin\/items\/([^/]+)$/);
+  if (request.method === "GET" && itemMatch) {
+    const serverUrl = await requireConfiguredServerUrl();
+    const token = getLumioToken(request, requestUrl);
+    const user = await getJellyfinUser(serverUrl, token);
+    const itemId = decodeURIComponent(itemMatch[1]);
+    const item = await jellyfinFetch(serverUrl, jellyfinRoute(`/Items/${encodeURIComponent(itemId)}`, {
+      UserId: user.Id,
+      Fields: itemFields,
+    }), { headers: jellyfinHeaders(token) });
+    const episodes = item.Type === "Series" ? await getJellyfinEpisodes(serverUrl, user.Id, item.Id, token) : [];
+
+    sendJson(response, 200, {
+      item: mapJellyfinItem(item, token, episodes),
+      episodes,
+    });
+    return;
+  }
+
+  const imageMatch = requestUrl.pathname.match(/^\/api\/jellyfin\/image\/(user|item)\/([^/]+)\/(Primary|Backdrop)(?:\/(\d+))?$/);
+  if (request.method === "GET" && imageMatch) {
+    await proxyJellyfinImage(request, response, requestUrl, imageMatch);
+    return;
+  }
+
+  const streamMatch = requestUrl.pathname.match(/^\/api\/jellyfin\/stream\/([^/]+)$/);
+  if (request.method === "GET" && streamMatch) {
+    await proxyJellyfinStream(request, response, requestUrl, decodeURIComponent(streamMatch[1]));
     return;
   }
 
@@ -229,6 +311,131 @@ async function getJellyfinUser(serverUrl, token) {
   });
 }
 
+async function getJellyfinHome(serverUrl, userId, token) {
+  const headers = jellyfinHeaders(token);
+  const [allResult, latestResult, resumeResult] = await Promise.allSettled([
+    jellyfinFetch(serverUrl, jellyfinRoute("/Items", {
+      UserId: userId,
+      Recursive: "true",
+      IncludeItemTypes: "Movie,Series",
+      SortBy: "SortName",
+      Fields: itemFields,
+      ImageTypeLimit: "1",
+      Limit: "80",
+    }), { headers }),
+    jellyfinFetch(serverUrl, jellyfinRoute(`/Users/${encodeURIComponent(userId)}/Items/Latest`, {
+      IncludeItemTypes: "Movie,Series",
+      Fields: itemFields,
+      ImageTypeLimit: "1",
+      Limit: "24",
+    }), { headers }),
+    jellyfinFetch(serverUrl, jellyfinRoute("/UserItems/Resume", {
+      UserId: userId,
+      MediaTypes: "Video",
+      IncludeItemTypes: "Movie,Episode",
+      Fields: itemFields,
+      ImageTypeLimit: "1",
+      Limit: "24",
+    }), { headers }),
+  ]);
+
+  const allItems = resultItems(allResult).map((item) => mapJellyfinItem(item, token));
+  const latestItems = resultItems(latestResult).map((item) => mapJellyfinItem(item, token));
+  const resumeItems = resultItems(resumeResult).map((item) => mapJellyfinItem(item, token));
+  const mergedItems = mergeItems([...latestItems, ...resumeItems, ...allItems]);
+  const movies = mergedItems.filter((item) => item.type === "Movie");
+  const series = mergedItems.filter((item) => item.type === "Series");
+  const genres = [...new Set(mergedItems.flatMap((item) => item.genres || []))].sort();
+  const rows = [
+    { title: "Continue Watching", items: resumeItems },
+    { title: "Latest on Jellyfin", items: latestItems },
+    { title: "Movies", items: movies },
+    { title: "Series", items: series },
+  ].filter((row) => row.items.length > 0);
+
+  return {
+    items: mergedItems,
+    rows,
+    genres,
+  };
+}
+
+async function getJellyfinEpisodes(serverUrl, userId, seriesId, token) {
+  const data = await jellyfinFetch(serverUrl, jellyfinRoute(`/Shows/${encodeURIComponent(seriesId)}/Episodes`, {
+    UserId: userId,
+    Fields: itemFields,
+    ImageTypeLimit: "1",
+  }), { headers: jellyfinHeaders(token) });
+
+  return getItemsArray(data).map((item, index) => mapJellyfinItem(item, token, [], index));
+}
+
+async function proxyJellyfinImage(request, response, requestUrl, match) {
+  const serverUrl = await requireConfiguredServerUrl();
+  const [, kind, id, imageType, index = "0"] = match;
+  const token = getLumioToken(request, requestUrl);
+  const itemImageRoute = imageType === "Backdrop"
+    ? `/Items/${encodeURIComponent(decodeURIComponent(id))}/Images/${imageType}/${index}`
+    : `/Items/${encodeURIComponent(decodeURIComponent(id))}/Images/${imageType}`;
+  const route = kind === "user"
+    ? jellyfinRoute(`/Users/${encodeURIComponent(decodeURIComponent(id))}/Images/${imageType}`, {
+      tag: requestUrl.searchParams.get("tag") || "",
+      maxWidth: requestUrl.searchParams.get("w") || "600",
+      quality: requestUrl.searchParams.get("quality") || "90",
+    })
+    : jellyfinRoute(itemImageRoute, {
+      tag: requestUrl.searchParams.get("tag") || "",
+      fillWidth: requestUrl.searchParams.get("w") || "",
+      fillHeight: requestUrl.searchParams.get("h") || "",
+      quality: requestUrl.searchParams.get("quality") || "90",
+    });
+
+  await proxyJellyfinBinary(response, `${serverUrl}${route}`, {
+    headers: jellyfinHeaders(token),
+  });
+}
+
+async function proxyJellyfinStream(request, response, requestUrl, itemId) {
+  const serverUrl = await requireConfiguredServerUrl();
+  const token = getLumioToken(request, requestUrl);
+  const route = jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream`, {
+    static: "true",
+  });
+  const headers = jellyfinHeaders(token);
+
+  if (request.headers.range) {
+    headers.Range = request.headers.range;
+  }
+
+  await proxyJellyfinBinary(response, `${serverUrl}${route}`, { headers });
+}
+
+async function proxyJellyfinBinary(response, url, options) {
+  let upstream;
+  try {
+    upstream = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch {
+    throw httpError(502, "Could not reach the Jellyfin server.");
+  }
+
+  const headers = {};
+  for (const header of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) {
+    const value = upstream.headers.get(header);
+    if (value) headers[header] = value;
+  }
+
+  response.writeHead(upstream.status, headers);
+  if (!upstream.body) {
+    response.end();
+    return;
+  }
+
+  Readable.fromWeb(upstream.body).pipe(response);
+}
+
 async function jellyfinFetch(serverUrl, route, options = {}) {
   let response;
   try {
@@ -256,9 +463,9 @@ async function jellyfinFetch(serverUrl, route, options = {}) {
   return data;
 }
 
-function getLumioToken(request) {
+function getLumioToken(request, requestUrl = null) {
   const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-  return bearer || request.headers["x-lumio-token"] || "";
+  return bearer || request.headers["x-lumio-token"] || requestUrl?.searchParams?.get("token") || "";
 }
 
 function jellyfinAuthorizationHeader(token = "") {
@@ -271,6 +478,24 @@ function jellyfinAuthorizationHeader(token = "") {
 
   if (token) values.push(`Token="${token}"`);
   return values.join(", ");
+}
+
+function jellyfinHeaders(token = "") {
+  return {
+    "X-Emby-Authorization": jellyfinAuthorizationHeader(token),
+    ...(token ? { "X-Emby-Token": token } : {}),
+  };
+}
+
+function jellyfinRoute(route, query = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+
+  return `${route}${params.size ? `?${params.toString()}` : ""}`;
 }
 
 function normalizeServerUrl(value) {
@@ -288,13 +513,106 @@ function normalizeServerUrl(value) {
   }
 }
 
-function sanitizeUser(user = {}) {
+function sanitizeUser(user = {}, token = "") {
   return {
     id: user.Id,
     name: user.Name,
     isAdmin: Boolean(user.Policy?.IsAdministrator),
     primaryImageTag: user.PrimaryImageTag || "",
+    profileImage: user.PrimaryImageTag ? imageProxyUrl("user", user.Id, "Primary", token, { tag: user.PrimaryImageTag, w: 240 }) : "",
   };
+}
+
+function resultItems(result) {
+  return result.status === "fulfilled" ? getItemsArray(result.value) : [];
+}
+
+function getItemsArray(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.Items)) return data.Items;
+  return [];
+}
+
+function mergeItems(items) {
+  const seen = new Map();
+  for (const item of items) {
+    if (!item?.id || seen.has(item.id)) continue;
+    seen.set(item.id, item);
+  }
+  return [...seen.values()];
+}
+
+function mapJellyfinItem(item = {}, token = "", episodes = [], index = 0) {
+  const type = mapItemType(item.Type);
+  const backdropTag = item.BackdropImageTags?.[0] || "";
+  const primaryTag = item.ImageTags?.Primary || "";
+  const fallbackImage = "https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&w=1400&h=780&q=82";
+  const backdrop = backdropTag
+    ? imageProxyUrl("item", item.Id, "Backdrop", token, { tag: backdropTag, w: 1400, h: 780, index: 0 })
+    : primaryTag
+      ? imageProxyUrl("item", item.Id, "Primary", token, { tag: primaryTag, w: 1400, h: 780 })
+      : fallbackImage;
+  const poster = primaryTag
+    ? imageProxyUrl("item", item.Id, "Primary", token, { tag: primaryTag, w: 600, h: 900 })
+    : backdrop;
+  const duration = formatTicks(item.RunTimeTicks, type === "Series" ? "Series" : "Movie");
+  const progress = Math.round(item.UserData?.PlayedPercentage || 0);
+
+  return {
+    id: item.Id,
+    title: item.Name || item.SeriesName || "Untitled",
+    type,
+    jellyfinType: item.Type || "",
+    source: "jellyfin",
+    year: item.ProductionYear || "",
+    maturity: item.OfficialRating || "NR",
+    duration,
+    rating: Number(item.CommunityRating || 0).toFixed(1).replace(/\.0$/, "") || "0",
+    progress,
+    genres: item.Genres?.length ? item.Genres : [type],
+    hero: backdrop,
+    poster,
+    backdrop,
+    description: item.Overview || "No overview is available for this Jellyfin title yet.",
+    cast: (item.People || []).slice(0, 5).map((person) => person.Name),
+    episodes,
+    streamUrl: item.Type === "Movie" || item.Type === "Episode" ? `/api/jellyfin/stream/${encodeURIComponent(item.Id)}?token=${encodeURIComponent(token)}` : "",
+    episodeNumber: item.IndexNumber || index + 1,
+    seasonNumber: item.ParentIndexNumber || "",
+    runtime: duration,
+  };
+}
+
+function mapItemType(type = "") {
+  if (type === "Movie") return "Movie";
+  if (type === "Series") return "Series";
+  if (type === "Episode") return "Episode";
+  return type || "Title";
+}
+
+function formatTicks(ticks, fallbackType = "Title") {
+  const seconds = Math.round(Number(ticks || 0) / 10000000);
+  if (!seconds) return fallbackType === "Series" ? "Series" : "Video";
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
+function imageProxyUrl(kind, id, type, token, options = {}) {
+  const params = new URLSearchParams();
+  params.set("token", token);
+  if (options.tag) params.set("tag", options.tag);
+  if (options.w) params.set("w", options.w);
+  if (options.h) params.set("h", options.h);
+  const index = options.index ?? 0;
+
+  return `/api/jellyfin/image/${kind}/${encodeURIComponent(id)}/${type}${type === "Backdrop" ? `/${index}` : ""}?${params.toString()}`;
 }
 
 function sendJson(response, status, payload) {

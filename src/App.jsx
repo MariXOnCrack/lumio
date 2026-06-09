@@ -124,6 +124,7 @@ function App() {
   const [config, setConfig] = useState({ configured: false, jellyfinServerUrl: "" });
   const [session, setSession] = useState(() => readStoredSession());
   const [bootState, setBootState] = useState({ loading: true, error: "" });
+  const [library, setLibrary] = useState({ loading: false, error: "", items: [], rows: [], genres: [] });
 
   const toggleSaved = (id) => {
     setSavedIds((current) => {
@@ -137,9 +138,10 @@ function App() {
     });
   };
 
-  const saved = useMemo(() => media.filter((item) => savedIds.has(item.id)), [savedIds]);
+  const activeItems = library.items.length > 0 ? library.items : media;
+  const saved = useMemo(() => activeItems.filter((item) => savedIds.has(item.id)), [activeItems, savedIds]);
   const isAdmin = Boolean(session?.user?.isAdmin);
-  const appState = { savedIds, saved, toggleSaved, config, session };
+  const appState = { savedIds, saved, toggleSaved, config, session, library };
 
   useEffect(() => {
     let active = true;
@@ -178,6 +180,37 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    async function loadLibrary() {
+      if (!session?.accessToken) return;
+
+      setLibrary((current) => ({ ...current, loading: true, error: "" }));
+
+      try {
+        const data = await apiRequest("/api/jellyfin/home", { token: session.accessToken });
+        if (!active) return;
+        setLibrary({
+          loading: false,
+          error: "",
+          items: data.items || [],
+          rows: data.rows || [],
+          genres: data.genres || [],
+        });
+      } catch (error) {
+        if (!active) return;
+        setLibrary((current) => ({ ...current, loading: false, error: error.message }));
+      }
+    }
+
+    loadLibrary();
+
+    return () => {
+      active = false;
+    };
+  }, [session?.accessToken]);
+
   const handleLogin = (nextSession) => {
     setSession(nextSession);
     writeStoredSession(nextSession);
@@ -185,6 +218,7 @@ function App() {
 
   const handleLogout = () => {
     setSession(null);
+    setLibrary({ loading: false, error: "", items: [], rows: [], genres: [] });
     writeStoredSession(null);
   };
 
@@ -215,7 +249,7 @@ function App() {
         <Route path="admin" element={isAdmin ? <AdminPage config={config} session={session} onConfigSaved={setConfig} /> : <Navigate to="/" replace />} />
         <Route path="title/:id" element={<TitlePage {...appState} />} />
       </Route>
-      <Route path="watch/:id" element={<WatchPage />} />
+      <Route path="watch/:id" element={<WatchPage library={library} session={session} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
@@ -281,7 +315,7 @@ function ProfileMenu({ config, session, triggerClassName, showName = false, onLo
           )}
         >
           <Avatar className="sidebar-avatar size-9">
-            <AvatarImage src="" />
+            <AvatarImage src={session?.user?.profileImage || ""} />
             <AvatarFallback>{getInitials(userName)}</AvatarFallback>
           </Avatar>
           {showName && (
@@ -640,13 +674,22 @@ function AdminPage({ config, session, onConfigSaved }) {
   );
 }
 
-function HomePage({ savedIds, toggleSaved }) {
+function HomePage({ savedIds, toggleSaved, library }) {
+  const itemRows = getLibraryRows(library);
+  const items = getLibraryItems(library);
+
   return (
     <PageFrame>
-      <HeroCarousel savedIds={savedIds} toggleSaved={toggleSaved} />
-      <GenrePills />
+      {library?.loading && <LibraryNotice message="Loading your Jellyfin library..." />}
+      {library?.error && <LibraryNotice message={library.error} />}
+      {items.length > 0 ? (
+        <HeroCarousel items={items} savedIds={savedIds} toggleSaved={toggleSaved} />
+      ) : !library?.loading ? (
+        <EmptyState title="No Jellyfin titles found" />
+      ) : null}
+      <GenrePills genresData={getLibraryGenres(library)} />
       <div className="mt-6 grid gap-7 sm:mt-8 sm:gap-8">
-        {rows.map((row) => (
+        {itemRows.map((row) => (
           <MediaRow
             key={row.title}
             title={row.title}
@@ -660,8 +703,32 @@ function HomePage({ savedIds, toggleSaved }) {
   );
 }
 
+function LibraryNotice({ message }) {
+  return (
+    <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm font-semibold text-destructive">
+      {message}
+    </div>
+  );
+}
+
 function PageFrame({ children }) {
   return <div className="w-full overflow-hidden">{children}</div>;
+}
+
+function getLibraryItems(library) {
+  return library ? library.items || [] : media;
+}
+
+function getLibraryRows(library) {
+  return library ? library.rows || [] : rows;
+}
+
+function getLibraryGenres(library) {
+  return library ? library.genres || [] : genres;
+}
+
+function getLibraryTitle(id, library) {
+  return getLibraryItems(library).find((item) => item.id === id) || getTitle(id);
 }
 
 function MediaImage({ src, alt = "", className, imageClassName, loading = "lazy" }) {
@@ -681,10 +748,10 @@ function MediaImage({ src, alt = "", className, imageClassName, loading = "lazy"
   );
 }
 
-function HeroCarousel({ savedIds, toggleSaved }) {
-  const heroItems = media.slice(0, 5);
+function HeroCarousel({ items = media, savedIds, toggleSaved }) {
+  const heroItems = (items.length ? items : media).slice(0, 5);
   const [activeIndex, setActiveIndex] = useState(0);
-  const active = heroItems[activeIndex];
+  const active = heroItems[activeIndex] || media[0];
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -760,14 +827,14 @@ function HeroCarousel({ savedIds, toggleSaved }) {
   );
 }
 
-function GenrePills() {
+function GenrePills({ genresData = genres }) {
   return (
     <ScrollArea className="mt-4 w-full max-w-full whitespace-nowrap sm:mt-5">
       <div className="flex gap-2 pb-3">
         <Button asChild variant="secondary" className="rounded-full">
           <Link to="/browse">All Genres</Link>
         </Button>
-        {genres.map((genre) => (
+        {genresData.map((genre) => (
           <Button key={genre} asChild variant="outline" className="rounded-full">
             <Link to={`/browse?genre=${encodeURIComponent(genre)}`}>{genre}</Link>
           </Button>
@@ -966,20 +1033,21 @@ function MediaCard({ item, saved, onToggleSaved, className, delay = 0 }) {
   );
 }
 
-function BrowsePage({ savedIds, toggleSaved }) {
+function BrowsePage({ savedIds, toggleSaved, library }) {
   const [searchParams] = useSearchParams();
   const type = searchParams.get("type") || "All";
   const genre = searchParams.get("genre") || "All";
   const [activeType, setActiveType] = useState(type);
+  const items = getLibraryItems(library);
 
   const filtered = useMemo(
     () =>
-      media.filter((item) => {
+      items.filter((item) => {
         const typeMatch = activeType === "All" || item.type === activeType;
         const genreMatch = genre === "All" || item.genres.includes(genre);
         return typeMatch && genreMatch;
       }),
-    [activeType, genre],
+    [activeType, genre, items],
   );
 
   return (
@@ -997,20 +1065,56 @@ function BrowsePage({ savedIds, toggleSaved }) {
           <TabsTrigger value="Documentary">Docs</TabsTrigger>
         </TabsList>
         <TabsContent value={activeType}>
-          <MediaGrid items={filtered} savedIds={savedIds} toggleSaved={toggleSaved} />
+          {filtered.length > 0 ? (
+            <MediaGrid items={filtered} savedIds={savedIds} toggleSaved={toggleSaved} />
+          ) : (
+            <EmptyState title={library?.loading ? "Loading Jellyfin library" : "No Jellyfin titles found"} />
+          )}
         </TabsContent>
       </Tabs>
     </PageFrame>
   );
 }
 
-function SearchPage({ savedIds, toggleSaved }) {
+function SearchPage({ savedIds, toggleSaved, library, session }) {
   const [searchParams] = useSearchParams();
-  const query = (searchParams.get("q") || "").toLowerCase();
-  const results = media.filter((item) => {
-    const haystack = [item.title, item.type, ...item.genres, ...item.cast].join(" ").toLowerCase();
-    return haystack.includes(query);
+  const query = (searchParams.get("q") || "").trim();
+  const lowerQuery = query.toLowerCase();
+  const [remoteState, setRemoteState] = useState({ loading: false, error: "", items: [] });
+  const localItems = getLibraryItems(library);
+  const localResults = localItems.filter((item) => {
+    const haystack = [item.title, item.type, ...(item.genres || []), ...(item.cast || [])].join(" ").toLowerCase();
+    return haystack.includes(lowerQuery);
   });
+  const results = remoteState.items.length > 0 ? remoteState.items : localResults;
+
+  useEffect(() => {
+    let active = true;
+
+    async function searchJellyfin() {
+      if (!query || !session?.accessToken) {
+        setRemoteState({ loading: false, error: "", items: [] });
+        return;
+      }
+
+      setRemoteState((current) => ({ ...current, loading: true, error: "" }));
+
+      try {
+        const data = await apiRequest(`/api/jellyfin/search?q=${encodeURIComponent(query)}`, { token: session.accessToken });
+        if (!active) return;
+        setRemoteState({ loading: false, error: "", items: data.items || [] });
+      } catch (error) {
+        if (!active) return;
+        setRemoteState({ loading: false, error: error.message, items: [] });
+      }
+    }
+
+    searchJellyfin();
+
+    return () => {
+      active = false;
+    };
+  }, [query, session?.accessToken]);
 
   return (
     <PageFrame>
@@ -1019,8 +1123,11 @@ function SearchPage({ savedIds, toggleSaved }) {
         title={query ? `Results for "${query}"` : "Search Lumio"}
         description="Search matches titles, genres, cast, and formats."
       />
+      {remoteState.error && <LibraryNotice message={remoteState.error} />}
       {query && results.length > 0 ? (
         <MediaGrid items={results} savedIds={savedIds} toggleSaved={toggleSaved} />
+      ) : remoteState.loading ? (
+        <EmptyState title="Searching Jellyfin" />
       ) : (
         <EmptyState title={query ? "No titles found" : "Type a search above"} />
       )}
@@ -1225,19 +1332,51 @@ function EmptyState({ title }) {
   );
 }
 
-function TitlePage({ savedIds, toggleSaved }) {
+function TitlePage({ savedIds, toggleSaved, library, session }) {
   const { pathname } = useLocation();
   const id = pathname.split("/").pop();
-  const item = getTitle(id);
+  const baseItem = getLibraryTitle(id, library);
+  const [detailState, setDetailState] = useState({ loading: Boolean(baseItem?.source === "jellyfin"), error: "", item: null });
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadDetails() {
+      if (!session?.accessToken || baseItem?.source !== "jellyfin") {
+        setDetailState({ loading: false, error: "", item: null });
+        return;
+      }
+
+      setDetailState((current) => ({ ...current, loading: true, error: "" }));
+
+      try {
+        const data = await apiRequest(`/api/jellyfin/items/${encodeURIComponent(id)}`, { token: session.accessToken });
+        if (!active) return;
+        setDetailState({ loading: false, error: "", item: data.item });
+      } catch (error) {
+        if (!active) return;
+        setDetailState({ loading: false, error: error.message, item: null });
+      }
+    }
+
+    loadDetails();
+
+    return () => {
+      active = false;
+    };
+  }, [baseItem?.source, id, session?.accessToken]);
+
+  const item = detailState.item || baseItem;
 
   if (!item) {
     return <Navigate to="/" replace />;
   }
 
-  const related = media.filter((entry) => entry.id !== item.id && entry.genres.some((genre) => item.genres.includes(genre)));
+  const related = getLibraryItems(library).filter((entry) => entry.id !== item.id && entry.genres.some((genre) => item.genres.includes(genre)));
 
   return (
     <PageFrame>
+      {detailState.error && <LibraryNotice message={detailState.error} />}
       <section className="relative min-h-[580px] overflow-hidden rounded-lg border bg-card">
         <MediaImage src={item.backdrop} className="absolute inset-0" loading="eager" />
         <div className="media-mask absolute inset-0" />
@@ -1319,7 +1458,7 @@ function EpisodeCarousel({ item }) {
         header={<h2 className="animate-text-load text-xl font-bold">Episodes</h2>}
         action={
           <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
-            <Link to={`/watch/${item.id}`}>Resume</Link>
+            <Link to={`/watch/${item.episodes?.[0]?.id || item.id}`}>Resume</Link>
           </Button>
         }
       >
@@ -1330,12 +1469,12 @@ function EpisodeCarousel({ item }) {
               className="w-[280px] shrink-0 animate-reveal-up sm:w-[360px]"
               style={{ animationDelay: `${index * 45}ms` }}
             >
-              <Link to={`/watch/${item.id}`} className="group block">
+              <Link to={`/watch/${episode.id || item.id}`} className="group block">
                 <div className="relative">
                   <MediaImage
                     className="aspect-video rounded-md"
                     imageClassName="transition-transform duration-300 group-hover:scale-105"
-                    src={item.backdrop}
+                    src={episode.backdrop || item.backdrop}
                   />
                   {episode.progress > 0 && (
                     <>
@@ -1355,7 +1494,7 @@ function EpisodeCarousel({ item }) {
                       {episode.title}
                     </h3>
                     <p className="animate-text-load mt-0.5 text-xs text-muted-foreground" style={{ animationDelay: `${index * 45 + 130}ms` }}>
-                      E{index + 1} / {episode.runtime}
+                      E{episode.episodeNumber || index + 1} / {episode.runtime || episode.duration}
                     </p>
                   </div>
                   <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-md bg-white text-black">
@@ -1402,16 +1541,25 @@ function PlayerControlButton({ children, label, active = false, className, ...pr
   );
 }
 
-function WatchPage() {
+function getPlaybackItem(item) {
+  if (!item?.episodes?.length) return item;
+  return item.episodes.find((episode) => episode.progress > 0 && episode.progress < 100)
+    || item.episodes.find((episode) => episode.progress < 100)
+    || item.episodes[0]
+    || item;
+}
+
+function WatchPage({ library, session }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const id = pathname.split("/").pop();
-  const requestedItem = getTitle(id);
-  const item = requestedItem || media[0];
-  const missingItem = !requestedItem;
+  const baseItem = getLibraryTitle(id, library);
   const playerRef = useRef(null);
+  const videoRef = useRef(null);
+  const [detailState, setDetailState] = useState({ loading: !baseItem && Boolean(session?.accessToken), error: "", item: null });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(0);
   const [volume, setVolume] = useState(72);
   const [muted, setMuted] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -1427,8 +1575,41 @@ function WatchPage() {
   const [playerMenuContainer, setPlayerMenuContainer] = useState(null);
   const lastActivityRef = useRef(0);
 
-  const episode = item.episodes[1] || { title: item.title, runtime: item.duration, progress: item.progress || 8 };
-  const durationSeconds = timeToSeconds(episode.runtime || item.duration);
+  useEffect(() => {
+    let active = true;
+
+    async function loadItem() {
+      if (!session?.accessToken || (baseItem && baseItem.source !== "jellyfin")) {
+        setDetailState({ loading: false, error: "", item: null });
+        return;
+      }
+
+      setDetailState((current) => ({ ...current, loading: true, error: "" }));
+
+      try {
+        const data = await apiRequest(`/api/jellyfin/items/${encodeURIComponent(id)}`, { token: session.accessToken });
+        if (!active) return;
+        setDetailState({ loading: false, error: "", item: data.item });
+      } catch (error) {
+        if (!active) return;
+        setDetailState({ loading: false, error: error.message, item: null });
+      }
+    }
+
+    loadItem();
+
+    return () => {
+      active = false;
+    };
+  }, [baseItem?.source, id, session?.accessToken]);
+
+  const item = detailState.item || baseItem || media[0];
+  const missingItem = !detailState.loading && !detailState.item && !baseItem;
+  const playbackItem = getPlaybackItem(item);
+  const episode = playbackItem?.id !== item.id ? playbackItem : { ...item, title: item.title, runtime: item.duration, progress: item.progress || 0 };
+  const streamUrl = playbackItem?.streamUrl || item.streamUrl || "";
+  const hasVideo = Boolean(streamUrl);
+  const durationSeconds = mediaDuration || timeToSeconds(episode.runtime || episode.duration || item.duration);
   const startTime = Math.round(((episode.progress || item.progress || 0) / 100) * durationSeconds);
   const progressPercent = durationSeconds > 0 ? Math.min(100, (currentTime / durationSeconds) * 100) : 0;
   const effectiveVolume = muted ? 0 : volume;
@@ -1451,16 +1632,17 @@ function WatchPage() {
 
   useEffect(() => {
     setCurrentTime(startTime);
+    setMediaDuration(0);
     setIsPlaying(false);
     setControlsVisible(true);
-  }, [item.id, startTime]);
+  }, [playbackItem?.id, startTime]);
 
   useEffect(() => {
     setPlayerMenuContainer(playerRef.current);
   }, []);
 
   useEffect(() => {
-    if (!isPlaying) return undefined;
+    if (!isPlaying || hasVideo) return undefined;
 
     const timer = window.setInterval(() => {
       setCurrentTime((time) => {
@@ -1473,7 +1655,27 @@ function WatchPage() {
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [durationSeconds, isPlaying, speed]);
+  }, [durationSeconds, hasVideo, isPlaying, speed]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasVideo) return;
+
+    if (isPlaying) {
+      video.play().catch(() => setIsPlaying(false));
+    } else {
+      video.pause();
+    }
+  }, [hasVideo, isPlaying, streamUrl]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasVideo) return;
+
+    video.volume = Math.max(0, Math.min(1, effectiveVolume / 100));
+    video.muted = muted || effectiveVolume === 0;
+    video.playbackRate = speed;
+  }, [effectiveVolume, hasVideo, muted, speed]);
 
   useEffect(() => {
     if (!isPlaying || statsOpen || settingsOpen) {
@@ -1520,7 +1722,29 @@ function WatchPage() {
       onTouchStart={revealControls}
     >
       <div className="relative min-h-screen">
-        <MediaImage className="player-backdrop absolute inset-0" imageClassName="scale-[1.02]" src={item.backdrop} loading="eager" />
+        {hasVideo ? (
+          <video
+            ref={videoRef}
+            className="player-backdrop absolute inset-0 size-full object-cover"
+            poster={playbackItem.backdrop || item.backdrop}
+            src={streamUrl}
+            playsInline
+            onLoadedMetadata={(event) => {
+              const duration = event.currentTarget.duration;
+              if (Number.isFinite(duration)) {
+                setMediaDuration(duration);
+                if (startTime > 0 && event.currentTarget.currentTime < 1) {
+                  event.currentTarget.currentTime = startTime;
+                  setCurrentTime(startTime);
+                }
+              }
+            }}
+            onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+            onEnded={() => setIsPlaying(false)}
+          />
+        ) : (
+          <MediaImage className="player-backdrop absolute inset-0" imageClassName="scale-[1.02]" src={item.backdrop} loading="eager" />
+        )}
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.08),rgba(0,0,0,0.55)_62%,rgba(0,0,0,0.9)_100%)]" />
         <div className="player-overlay player-overlay-top absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/85 to-transparent" />
 
@@ -1548,7 +1772,13 @@ function WatchPage() {
             className="player-progress"
             max={durationSeconds}
             min="0"
-            onChange={(event) => setCurrentTime(Number(event.target.value))}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setCurrentTime(next);
+              if (videoRef.current && hasVideo) {
+                videoRef.current.currentTime = next;
+              }
+            }}
             style={{ "--progress": `${progressPercent}%` }}
             type="range"
             value={currentTime}
