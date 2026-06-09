@@ -448,31 +448,48 @@ async function proxyJellyfinImage(request, response, requestUrl, match) {
 async function proxyJellyfinStream(request, response, requestUrl, itemId) {
   const serverUrl = await requireConfiguredServerUrl();
   const token = getLumioToken(request, requestUrl);
-  const route = jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream`, {
-    static: "true",
-  });
+  if (!token) {
+    throw httpError(401, "Missing Jellyfin session.");
+  }
+  const mode = requestUrl.searchParams.get("mode") === "transcode" ? "transcode" : "direct";
+  const route = mode === "transcode"
+    ? jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream.mp4`, {
+      Static: "false",
+      VideoCodec: "h264",
+      AudioCodec: "aac,mp3,opus",
+      Container: "mp4",
+      TranscodingContainer: "mp4",
+      TranscodingProtocol: "http",
+      MaxAudioChannels: "2",
+      api_key: token,
+    })
+    : jellyfinRoute(`/Videos/${encodeURIComponent(itemId)}/stream`, {
+      Static: "true",
+      api_key: token,
+    });
   const headers = jellyfinHeaders(token);
 
   if (request.headers.range) {
     headers.Range = request.headers.range;
   }
 
-  await proxyJellyfinBinary(response, `${serverUrl}${route}`, { headers });
+  await proxyJellyfinBinary(response, `${serverUrl}${route}`, { headers, timeoutMs: 0 });
 }
 
-async function proxyJellyfinBinary(response, url, options) {
+async function proxyJellyfinBinary(response, url, options = {}) {
+  const { timeoutMs = 30000, ...fetchOptions } = options;
   let upstream;
   try {
     upstream = await fetch(url, {
-      ...options,
-      signal: AbortSignal.timeout(30000),
+      ...fetchOptions,
+      ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
   } catch {
     throw httpError(502, "Could not reach the Jellyfin server.");
   }
 
   const headers = {};
-  for (const header of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) {
+  for (const header of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control", "expires"]) {
     const value = upstream.headers.get(header);
     if (value) headers[header] = value;
   }
@@ -640,7 +657,7 @@ function mapJellyfinItem(item = {}, token = "", episodes = [], index = 0) {
     description: item.Overview || "No overview is available for this Jellyfin title yet.",
     cast: (item.People || []).slice(0, 5).map((person) => person.Name),
     episodes,
-    streamUrl: item.Type === "Movie" || item.Type === "Episode" ? `/api/jellyfin/stream/${encodeURIComponent(item.Id)}?token=${encodeURIComponent(token)}` : "",
+    streamUrl: item.Type === "Movie" || item.Type === "Episode" ? `/api/jellyfin/stream/${encodeURIComponent(item.Id)}?token=${encodeURIComponent(token)}&mode=direct` : "",
     episodeNumber: item.IndexNumber || index + 1,
     seasonNumber: item.ParentIndexNumber || "",
     runtime: duration,

@@ -790,7 +790,7 @@ function HeroCarousel({ items = media, savedIds, toggleSaved }) {
           <h1 className="animate-text-load mt-4 max-w-[13ch] text-4xl font-black leading-tight sm:mt-5 sm:text-6xl lg:text-7xl" style={{ animationDelay: "110ms" }}>
             {active.title}
           </h1>
-          <p className="animate-text-load mt-3 line-clamp-3 max-w-2xl text-sm text-muted-foreground sm:mt-4 sm:text-lg" style={{ animationDelay: "180ms" }}>
+          <p className="scrollable-description animate-text-load mt-3 max-w-2xl text-sm text-muted-foreground sm:mt-4 sm:text-lg" style={{ animationDelay: "180ms" }}>
             {active.description}
           </p>
           <div className="animate-text-load mt-5 flex flex-wrap gap-2 sm:mt-6 sm:gap-3" style={{ animationDelay: "250ms" }}>
@@ -1491,7 +1491,7 @@ function TitlePage({ savedIds, toggleSaved, library, session }) {
                 {item.rating}
               </span>
             </div>
-            <p className="animate-text-load mt-4 max-w-3xl text-muted-foreground" style={{ animationDelay: "210ms" }}>
+            <p className="scrollable-description animate-text-load mt-4 max-w-3xl text-muted-foreground" style={{ animationDelay: "210ms" }}>
               {item.description}
             </p>
             <div className="animate-text-load mt-6 flex flex-wrap gap-3" style={{ animationDelay: "270ms" }}>
@@ -1638,6 +1638,11 @@ function getPlaybackItem(item) {
     || item;
 }
 
+function getJellyfinStreamUrl(item, token, mode) {
+  if (!item?.id || item.source !== "jellyfin" || !token) return "";
+  return `/api/jellyfin/stream/${encodeURIComponent(item.id)}?token=${encodeURIComponent(token)}&mode=${mode}`;
+}
+
 function WatchPage({ library, session }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -1662,6 +1667,8 @@ function WatchPage({ library, session }) {
   const [controlsVisible, setControlsVisible] = useState(true);
   const [activityTick, setActivityTick] = useState(0);
   const [playerMenuContainer, setPlayerMenuContainer] = useState(null);
+  const [playbackMode, setPlaybackMode] = useState("direct");
+  const [playbackError, setPlaybackError] = useState("");
   const lastActivityRef = useRef(0);
 
   useEffect(() => {
@@ -1696,7 +1703,7 @@ function WatchPage({ library, session }) {
   const missingItem = !detailState.loading && !detailState.item && !baseItem;
   const playbackItem = getPlaybackItem(item);
   const episode = playbackItem?.id !== item.id ? playbackItem : { ...item, title: item.title, runtime: item.duration, progress: item.progress || 0 };
-  const streamUrl = playbackItem?.streamUrl || item.streamUrl || "";
+  const streamUrl = getJellyfinStreamUrl(playbackItem, session?.accessToken, playbackMode) || playbackItem?.streamUrl || item.streamUrl || "";
   const hasVideo = Boolean(streamUrl);
   const durationSeconds = mediaDuration || timeToSeconds(episode.runtime || episode.duration || item.duration);
   const startTime = Math.round(((episode.progress || item.progress || 0) / 100) * durationSeconds);
@@ -1723,6 +1730,8 @@ function WatchPage({ library, session }) {
     setCurrentTime(startTime);
     setMediaDuration(0);
     setIsPlaying(false);
+    setPlaybackMode("direct");
+    setPlaybackError("");
     setControlsVisible(true);
   }, [playbackItem?.id, startTime]);
 
@@ -1830,6 +1839,16 @@ function WatchPage({ library, session }) {
             }}
             onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
             onEnded={() => setIsPlaying(false)}
+            onError={() => {
+              if (playbackMode === "direct") {
+                setPlaybackMode("transcode");
+                setPlaybackError("");
+                setIsPlaying(true);
+              } else {
+                setPlaybackError("Jellyfin could not provide a browser-playable stream for this item.");
+                setIsPlaying(false);
+              }
+            }}
           />
         ) : (
           <MediaImage className="player-backdrop absolute inset-0" imageClassName="scale-[1.02]" src={item.backdrop} loading="eager" />
@@ -1852,6 +1871,12 @@ function WatchPage({ library, session }) {
         {captions !== "Off" && (
           <div className="player-subtitles" aria-live="polite">
             <span>{subtitleText}</span>
+          </div>
+        )}
+
+        {playbackError && (
+          <div className="absolute left-1/2 top-1/2 z-30 w-[min(520px,calc(100%-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-md bg-black/70 p-4 text-center text-sm font-semibold text-white backdrop-blur">
+            {playbackError}
           </div>
         )}
 

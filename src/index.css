@@ -212,6 +212,29 @@
     outline: none;
   }
 
+  .scrollable-description {
+    max-height: 5.75rem;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+    padding-right: 0.35rem;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--foreground) / 0.2) transparent;
+  }
+
+  .scrollable-description::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .scrollable-description::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollable-description::-webkit-scrollbar-thumb {
+    border: 0;
+    border-radius: 999px;
+    background: hsl(var(--foreground) / 0.2);
+  }
+
   .animate-reveal-up {
     animation: reveal-up 520ms ease both;
   }
